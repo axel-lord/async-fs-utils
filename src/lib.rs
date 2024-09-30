@@ -1,4 +1,4 @@
-//! Async utilities.
+#![doc = include_str!("../README.md")]
 
 use ::std::{
     ffi::{OsStr, OsString},
