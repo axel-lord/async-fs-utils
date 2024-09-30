@@ -1,0 +1,29 @@
+[package]
+name = "async-fs-utils"
+version = "0.1.0"
+edition = "2021"
+authors = ["Axel Lord"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+log = "0.4.22"
+libc = "0.2.158"
+nix = { version = "0.29.0", features = ["mman", "user", "fs", "dir"] }
+tokio = { version = "1.40.0", features = ["rt"] }
+paste = "1.0.15"
+smallvec = { version = "1.13.2", features = ["const_generics", "serde", "write", "union"] }
+reflink-at = { git = "https://github.com/axel-lord/reflink-at" }
+tokio-stream = { version = "0.1.16", features = ["sync"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+allow_attributes = "warn"
+missing_docs_in_private_items = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+missing_safety_doc = "warn"
+future_not_send = "warn"
+missing_const_for_fn = "warn"
