@@ -18,6 +18,7 @@ mod kw {
 
     custom_keyword!(wrapped);
     custom_keyword!(defer_err);
+    custom_keyword!(err);
 }
 
 /// Macro attributes.
@@ -37,6 +38,15 @@ enum InBlockingAttr {
         /// Keyword.
         defer_err: kw::defer_err,
     },
+    /// Additional error information.
+    Err {
+        /// Keyword.
+        err: kw::err,
+        /// Eq token.
+        eq_token: Token![=],
+        /// Line to add to error section.
+        msg: LitStr,
+    },
 }
 
 impl ToTokens for InBlockingAttr {
@@ -52,6 +62,11 @@ impl ToTokens for InBlockingAttr {
                 path.to_tokens(tokens);
             }
             InBlockingAttr::DeferErr { defer_err } => defer_err.to_tokens(tokens),
+            InBlockingAttr::Err { err, eq_token, msg } => {
+                err.to_tokens(tokens);
+                eq_token.to_tokens(tokens);
+                msg.to_tokens(tokens);
+            }
         }
     }
 }
@@ -69,6 +84,12 @@ impl Parse for InBlockingAttr {
             Ok(InBlockingAttr::DeferErr {
                 defer_err: input.parse()?,
             })
+        } else if lookahead.peek(kw::err) {
+            Ok(InBlockingAttr::Err {
+                err: input.parse()?,
+                eq_token: input.parse()?,
+                msg: input.parse()?,
+            })
         } else {
             Err(lookahead.error())
         }
@@ -77,10 +98,8 @@ impl Parse for InBlockingAttr {
 
 /// If attribute is a doc attribute extract documentation.
 fn extract_doc(attr: &Attribute) -> Option<String> {
-    thread_local! {
-        static DOC: ::syn::Path = parse_quote!(doc);
-    }
-    if !DOC.with(|doc| doc == attr.path()) {
+    let doc: ::syn::Path = parse_quote!(doc);
+    if &doc != attr.path() {
         return None;
     }
     let Meta::NameValue(MetaNameValue {
@@ -112,23 +131,18 @@ pub fn in_blocking(attr: TokenStream, item: TokenStream) -> ::syn::Result<TokenS
 
 /// Typed implementation for [in_blocking].
 fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<TokenStream> {
-    thread_local! {
-        static DOC: ::syn::Path = parse_quote!(doc);
-        static PATH: ::syn::Path = parse_quote!(path);
-    }
+    let path_attr_kw: ::syn::Path = parse_quote!(path);
 
     let mut wrapped: Option<::syn::Path> = None;
-    let mut comment = String::new();
+    let mut inner_doc = String::new();
     let mut defer_err = false;
+    let mut extra_err = Vec::new();
 
     for attr in &attr {
         match attr {
-            InBlockingAttr::Wrapped {
-                wrapped: _,
-                eq_token: _,
-                path,
-            } => wrapped = Some(path.clone()),
-            InBlockingAttr::DeferErr { defer_err: _ } => defer_err = true,
+            InBlockingAttr::Wrapped { path, .. } => wrapped = Some(path.clone()),
+            InBlockingAttr::DeferErr { .. } => defer_err = true,
+            InBlockingAttr::Err { msg, .. } => extra_err.push(msg.value()),
         }
     }
 
@@ -137,7 +151,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         .into_iter()
         .filter_map(|attr| {
             if let Some(doc) = extract_doc(&attr) {
-                comment = doc;
+                inner_doc = doc;
                 None
             } else {
                 Some(attr)
@@ -175,7 +189,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
                 if let Some(doc) = extract_doc(&attr) {
                     doc_attr = doc;
                     Ok(None)
-                } else if PATH.with(|path| attr.path() == path) {
+                } else if &path_attr_kw == attr.path() {
                     if matches!(attr.meta, Meta::Path(..)) {
                         is_path = true;
                         Ok(None)
@@ -219,15 +233,17 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
 
     let name = f.sig.ident.clone();
 
-    let mut doc = format!("Run [{wrapped}] in a blocking thread.\nSee also [try_{name}][self::try_{name}].");
-    let mut try_doc = format!("Try to run [{wrapped}] in a blocking thread.\nSee also [{name}][self::{name}].");
+    let mut doc =
+        format!("Run [{wrapped}] in a blocking thread.\nSee also [try_{name}][self::try_{name}].");
+    let mut try_doc =
+        format!("Try to run [{wrapped}] in a blocking thread.\nSee also [{name}][self::{name}].");
 
-    if !comment.is_empty() {
+    if !inner_doc.is_empty() {
         doc.push_str("\n\n");
-        doc.push_str(&comment);
+        doc.push_str(&inner_doc);
 
         try_doc.push_str("\n\n");
-        try_doc.push_str(&comment);
+        try_doc.push_str(&inner_doc);
     }
 
     if !arg_docs.is_empty() {
@@ -243,22 +259,26 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         }
     }
 
-    try_doc.push_str("\n\n# Errors\nIf the blocking task cannot be joined or has thrown a panic.");
+    try_doc
+        .push_str("\n\n# Errors\n\nIf the blocking task cannot be joined or has thrown a panic.");
 
-    if defer_err {
-        doc.push_str(&format!("\n\n# Errors\nSee [{wrapped}]."));
-        try_doc.push_str(&format!("\n\nFor inner see [{wrapped}]."));
+    if defer_err || !extra_err.is_empty() {
+        doc.push_str("\n\n# Errors");
+        inner_doc.push_str("\n\n# Errors");
     }
 
-    let err_doc = if defer_err {
-        format!("# Errors\nSee [{wrapped}].")
-    } else {
-        String::new()
-    };
-
-    if !err_doc.is_empty() {
+    for line in extra_err {
         doc.push_str("\n\n");
-        doc.push_str(&err_doc);
+        doc.push_str(&line);
+
+        inner_doc.push_str("\n\n");
+        inner_doc.push_str(&line);
+    }
+
+    if defer_err {
+        doc.push_str(&format!("\n\nSee [{wrapped}]."));
+        inner_doc.push_str(&format!("\n\nSee [{wrapped}]."));
+        try_doc.push_str(&format!("\n\nFor inner see [{wrapped}]."));
     }
 
     doc.push_str("\n\n# Panics\nIf the blocking task cannot be joined or has thrown a panic.");
@@ -268,9 +288,6 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
     let ret_ty = f.sig.output.clone();
 
     f.sig.ident = ::syn::Ident::new(&format!("__{}_blocking", f.sig.ident), f.sig.ident.span());
-    f.attrs
-        .push(parse_quote!(#[doc = "inner blocking function"]));
-
     let inner_name = &f.sig.ident;
 
     let ret_ty: Type = match ret_ty {
@@ -282,6 +299,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
     let try_ret_ty: Type = parse_quote!(::std::result::Result<#ret_ty, ::tokio::task::JoinError>);
 
     Ok(quote::quote!(
+        #[doc = #inner_doc]
         #f
         #[doc = #doc]
         pub fn #name (#(#args),*) -> impl 'static + Send + ::std::future::Future<Output = #ret_ty> {
