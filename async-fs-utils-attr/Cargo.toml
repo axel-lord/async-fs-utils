@@ -1,0 +1,15 @@
+[package]
+name = "async-fs-utils-attr"
+version = "0.1.0"
+edition = "2021"
+authors = ["Axel Lord"]
+license = "MIT OR Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+async-fs-utils-attr-impl = { path = "../async-fs-utils-attr-impl/" }
+
+[lints]
+workspace = true
