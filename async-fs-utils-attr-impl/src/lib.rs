@@ -151,7 +151,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         .into_iter()
         .filter_map(|attr| {
             if let Some(doc) = extract_doc(&attr) {
-                inner_doc = doc;
+                inner_doc.push_str(&doc);
                 None
             } else {
                 Some(attr)
@@ -187,7 +187,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
             .into_iter()
             .filter_map(|attr| {
                 if let Some(doc) = extract_doc(&attr) {
-                    doc_attr = doc;
+                    doc_attr.push_str(&doc);
                     Ok(None)
                 } else if &path_attr_kw == attr.path() {
                     if matches!(attr.meta, Meta::Path(..)) {
