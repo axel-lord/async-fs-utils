@@ -15,7 +15,7 @@ use ::async_fs_utils_attr::in_blocking;
 use ::nix::{
     dir::Dir,
     errno::Errno,
-    fcntl::{AtFlags, OFlag, OpenHow},
+    fcntl::{AtFlags, OFlag, OpenHow, RenameFlags},
     sys::stat::{FileStat, Mode},
     NixPath,
 };
@@ -112,6 +112,7 @@ fn file_stat_at(
     /// Directory to resolve path in.
     fd: Option<RawFd>,
     /// File to stat.
+    #[path]
     path: OwnedPath,
     /// Flags used when resolving path.
     at_flags: AtFlags,
@@ -141,6 +142,7 @@ fn open_at_2(
     /// Direcory to resolve path in.
     dir_fd: RawFd,
     /// File to open.
+    #[path]
     path: OwnedPath,
     /// How to open file, such as how paths are resolved and what mode new files use.
     how: OpenHow,
@@ -153,6 +155,7 @@ fn open_at(
     /// Directory to resolve path in.
     dir_fd: Option<RawFd>,
     /// File to open.
+    #[path]
     path: OwnedPath,
     /// What mode to use if creating the file.
     mode: Mode,
@@ -167,6 +170,7 @@ fn read_link_at(
     /// Directory to resolve path in.
     dir_fd: Option<RawFd>,
     /// Path to link to read.
+    #[path]
     path: OwnedPath,
 ) -> Result<OsString, Errno> {
     nix::fcntl::readlinkat(dir_fd, &path)
@@ -178,6 +182,7 @@ fn reflink_unlinked(
     /// Directory to resolve dest in.
     dir_fd: Option<RawFd>,
     /// Where to create reflink.
+    #[path]
     dest: OwnedPath,
     /// File to reflik to.
     src: RawFd,
@@ -225,4 +230,39 @@ fn reflink_at(
         mode,
         on_exists,
     )
+}
+
+#[in_blocking(wrapped = nix::fcntl::renameat, defer_err)]
+fn rename_at(
+    /// Directory to resolve old_path in.
+    old_dir_fd: Option<RawFd>,
+    /// File to rename.
+    #[path]
+    old_path: OwnedPath,
+    /// Directory to resolve new_path in.
+    new_dir_fd: Option<RawFd>,
+    /// What to rename file to.
+    #[path]
+    new_path: OwnedPath,
+) -> Result<(), Errno> {
+    nix::fcntl::renameat(old_dir_fd, &old_path, new_dir_fd, &new_path)
+}
+
+#[in_blocking(wrapped = nix::fcntl::renameat2, defer_err)]
+fn rename_at_2(
+    /// Directory to resolve old_path in.
+    old_dir_fd: Option<RawFd>,
+    /// File to rename.
+    #[path]
+    old_path: OwnedPath,
+    /// Directory to resolve new_path in.
+    new_dir_fd: Option<RawFd>,
+    /// What to rename file to.
+    #[path]
+    new_path: OwnedPath,
+    /// Additional flags to use when renaming, such as whether or not to replace existing files or
+    /// swap with them.
+    flags: RenameFlags,
+) -> Result<(), Errno> {
+    nix::fcntl::renameat2(old_dir_fd, &old_path, new_dir_fd, &new_path, flags)
 }
