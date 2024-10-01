@@ -15,7 +15,7 @@ use ::async_fs_utils_attr::in_blocking;
 use ::nix::{
     dir::Dir,
     errno::Errno,
-    fcntl::{AtFlags, OFlag, OpenHow, ResolveFlag},
+    fcntl::{AtFlags, OFlag, OpenHow},
     sys::stat::{FileStat, Mode},
     NixPath,
 };
@@ -84,38 +84,6 @@ fn unwrap_joined<T>(t: Result<T, JoinError>) -> T {
     }
 }
 
-/// Run [nix::sys::stat::fstat] in a blocking thread.
-///
-/// # Errors
-/// See [nix::sys::stat::fstat].
-pub async fn file_stat(fd: RawFd) -> Result<FileStat, Errno> {
-    unwrap_joined(spawn_blocking(move || nix::sys::stat::fstat(fd)).await)
-}
-
-/// Run [nix::sys::stat::fstatat] in a blocking thread.
-///
-/// # Errors
-/// See [nix::sys::stat::fstatat].
-pub async fn file_stat_at<P>(
-    fd: Option<RawFd>,
-    path: P,
-    at_flags: AtFlags,
-) -> Result<FileStat, Errno>
-where
-    P: AsRef<Path> + Send,
-{
-    let path = OwnedPath::new(path);
-    unwrap_joined(spawn_blocking(move || nix::sys::stat::fstatat(fd, &path, at_flags)).await)
-}
-
-/// Run [nix::dir::Dir::from] in a blocking thread.
-///
-/// # Errors
-/// See [nix::dir::Dir::from].
-pub async fn open_dir(fd: OwnedFd) -> Result<Dir, Errno> {
-    unwrap_joined(spawn_blocking(move || Dir::from(fd)).await)
-}
-
 /// Read a directory as a stream.
 pub fn read_dir(dir: Dir) -> impl Stream<Item = Result<nix::dir::Entry, Errno>> {
     let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -131,125 +99,109 @@ pub fn read_dir(dir: Dir) -> impl Stream<Item = Result<nix::dir::Entry, Errno>> 
     tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
-/// Clone a file descriptor.
-///
-/// # Errors
-/// If the file descriptor cannot be cloned.
-pub async fn clone_fd(fd: OwnedFd) -> (OwnedFd, Result<OwnedFd, io::Error>) {
-    unwrap_joined(
-        spawn_blocking(move || {
-            let cloned = fd.try_clone();
-            (fd, cloned)
-        })
-        .await,
-    )
+#[in_blocking(wrapped = nix::sys::stat::fstat, defer_err)]
+fn file_stat(
+    /// file to stat
+    fd: RawFd,
+) -> Result<FileStat, Errno> {
+    nix::sys::stat::fstat(fd)
 }
 
-/// Run [nix::fcntl::openat2] in a blocking thread.
-///
-/// # Errors
-/// See [nix::fcntl::openat2].
-pub async fn open_at_2<P>(
+#[in_blocking(wrapped = nix::sys::stat::fstatat, defer_err)]
+fn file_stat_at(
+    /// Directory to resolve path in.
+    fd: Option<RawFd>,
+    /// File to stat.
+    path: OwnedPath,
+    /// Flags used when resolving path.
+    at_flags: AtFlags,
+) -> Result<FileStat, Errno> {
+    nix::sys::stat::fstatat(fd, &path, at_flags)
+}
+
+#[in_blocking(wrapped = nix::dir::Dir::from, defer_err)]
+fn open_dir(
+    /// Directory to open.
+    fd: OwnedFd,
+) -> Result<Dir, Errno> {
+    Dir::from(fd)
+}
+
+#[in_blocking(wrapped = OwnedFd::try_clone, defer_err)]
+fn clone_fd(
+    /// File descriptor to clone.
+    fd: OwnedFd,
+) -> (OwnedFd, Result<OwnedFd, io::Error>) {
+    let cloned = fd.try_clone();
+    (fd, cloned)
+}
+
+#[in_blocking(wrapped = nix::fcntl::openat2, defer_err)]
+fn open_at_2(
+    /// Direcory to resolve path in.
     dir_fd: RawFd,
-    path: P,
-    mode: Mode,
-    flags: OFlag,
-    resolve: ResolveFlag,
-) -> Result<OwnedFd, Errno>
-where
-    P: AsRef<Path> + Send,
-{
-    let path = OwnedPath::new(path);
-    unwrap_joined(
-        spawn_blocking(move || {
-            nix::fcntl::openat2(
-                dir_fd,
-                &path,
-                OpenHow::new().flags(flags).mode(mode).resolve(resolve),
-            )
-            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-        })
-        .await,
-    )
+    /// File to open.
+    path: OwnedPath,
+    /// How to open file, such as how paths are resolved and what mode new files use.
+    how: OpenHow,
+) -> Result<OwnedFd, Errno> {
+    nix::fcntl::openat2(dir_fd, &path, how).map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-/// Run [nix::fcntl::openat] in a blocking thread.
-///
-/// # Errors
-/// See [nix::fcntl::openat].
-pub async fn open_at<P>(
+#[in_blocking(wrapped = nix::fcntl::openat, defer_err)]
+fn open_at(
+    /// Directory to resolve path in.
     dir_fd: Option<RawFd>,
-    path: P,
+    /// File to open.
+    path: OwnedPath,
+    /// What mode to use if creating the file.
     mode: Mode,
+    /// File open flags, such as O_RDWR for read-write or O_RDONLY for read-only.
     flags: OFlag,
-) -> Result<OwnedFd, Errno>
-where
-    P: AsRef<Path> + Send,
-{
-    let path = OwnedPath::new(path);
-    unwrap_joined(
-        spawn_blocking(move || {
-            nix::fcntl::openat(dir_fd, &path, flags, mode)
-                .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-        })
-        .await,
-    )
+) -> Result<OwnedFd, Errno> {
+    nix::fcntl::openat(dir_fd, &path, flags, mode).map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-/// Run [nix::fcntl::readlinkat] in a blocking thread.
-///
-/// # Errors
-/// See [nix::fcntl::readlinkat].
-pub async fn read_link_at<P>(dir_fd: Option<RawFd>, path: P) -> Result<OsString, Errno>
-where
-    P: AsRef<Path> + Send,
-{
-    let path = OwnedPath::new(path);
-    unwrap_joined(spawn_blocking(move || nix::fcntl::readlinkat(dir_fd, &path)).await)
+#[in_blocking(wrapped = nix::fcntl::readlinkat, defer_err)]
+fn read_link_at(
+    /// Directory to resolve path in.
+    dir_fd: Option<RawFd>,
+    /// Path to link to read.
+    path: OwnedPath,
+) -> Result<OsString, Errno> {
+    nix::fcntl::readlinkat(dir_fd, &path)
 }
 
-/// Run [reflink_at::reflink_unlinked] in a blocking thread.
-///
 /// ´dir_fd´ and ´dest´ specify on what filesystem to create the reflink.
-///
-/// # Errors
-/// See [reflink_at::reflink_unlinked].
-pub async fn reflink_unlinked<P>(
+#[in_blocking(wrapped = reflink_at::reflink_unlinked, defer_err)]
+fn reflink_unlinked(
+    /// Directory to resolve dest in.
     dir_fd: Option<RawFd>,
-    dest: P,
+    /// Where to create reflink.
+    dest: OwnedPath,
+    /// File to reflik to.
     src: RawFd,
+    /// What file mode to use for created file.
     mode: Mode,
-) -> Result<OwnedFd, Errno>
-where
-    P: AsRef<Path> + Send,
-{
-    let dest = OwnedPath::new(dest);
-    unwrap_joined(
-        spawn_blocking(move || {
-            reflink_at::reflink_unlinked(
-                dir_fd.map(|dir_fd| unsafe { BorrowedFd::borrow_raw(dir_fd) }),
-                dest.as_ref(),
-                unsafe { BorrowedFd::borrow_raw(src) },
-                mode,
-            )
-        })
-        .await,
+) -> Result<OwnedFd, Errno> {
+    reflink_at::reflink_unlinked(
+        dir_fd.map(|dir_fd| unsafe { BorrowedFd::borrow_raw(dir_fd) }),
+        dest.as_ref(),
+        unsafe { BorrowedFd::borrow_raw(src) },
+        mode,
     )
 }
 
-/// Run [reflink_at::reflink] in a blocking thread.
-///
-/// # Errors
-/// See [reflink_at::reflink].
-pub async fn reflink(dest: RawFd, src: RawFd) -> Result<(), Errno> {
-    unwrap_joined(
-        spawn_blocking(move || {
-            reflink_at::reflink(unsafe { BorrowedFd::borrow_raw(dest) }, unsafe {
-                BorrowedFd::borrow_raw(src)
-            })
-        })
-        .await,
-    )
+#[in_blocking(wrapped = reflink_at::reflink, defer_err)]
+fn reflink(
+    /// File to overwrite with reflink.
+    dest: RawFd,
+    /// File to reflink to.
+    src: RawFd,
+) -> Result<(), Errno> {
+    reflink_at::reflink(unsafe { BorrowedFd::borrow_raw(dest) }, unsafe {
+        BorrowedFd::borrow_raw(src)
+    })
 }
 
 #[in_blocking(wrapped = reflink_at::reflink_at, defer_err)]
