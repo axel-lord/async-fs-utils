@@ -132,6 +132,7 @@ pub fn in_blocking(attr: TokenStream, item: TokenStream) -> ::syn::Result<TokenS
 /// Typed implementation for [in_blocking].
 fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<TokenStream> {
     let path_attr_kw: ::syn::Path = parse_quote!(path);
+    let fd_attr_kw: ::syn::Path = parse_quote!(raw_fd);
 
     let mut wrapped: Option<::syn::Path> = None;
     let mut inner_doc = String::new();
@@ -172,7 +173,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
     let mut args = Vec::<PatType>::new();
     let mut arg_names = Vec::new();
     let mut arg_docs = Vec::new();
-    let mut paths = Vec::<Stmt>::new();
+    let mut conversions = Vec::<Stmt>::new();
     for arg in &mut f.sig.inputs {
         let FnArg::Typed(arg) = arg else {
             return Err(::syn::Error::new(
@@ -182,6 +183,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         };
 
         let mut is_path = false;
+        let mut is_fd = false;
         let mut doc_attr = String::new();
         arg.attrs = std::mem::take(&mut arg.attrs)
             .into_iter()
@@ -197,6 +199,16 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
                         Err(::syn::Error::new(
                             attr.span(),
                             "path attribute should not take any arguments",
+                        ))
+                    }
+                } else if &fd_attr_kw == attr.path() {
+                    if matches!(attr.meta, Meta::Path(..)) {
+                        is_fd = true;
+                        Ok(None)
+                    } else {
+                        Err(::syn::Error::new(
+                            attr.span(),
+                            "raw_fd attribute should not take any arguments",
                         ))
                     }
                 } else {
@@ -221,9 +233,12 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
 
         if is_path {
             let ty = arg.ty.as_ref();
-            paths.push(parse_quote!(let #ident: #ty = #ident.as_ref().into();));
+            conversions.push(parse_quote!(let #ident: #ty = #ident.as_ref().into();));
             args.push(parse_quote!(#ident: impl AsRef<::std::path::Path>));
-        } else {
+        } else if is_fd{
+            conversions.push(parse_quote!(let #ident: ::std::os::fd::RawFd = ::std::os::fd::IntoRawFd::into_raw_fd(#ident);));
+            args.push(parse_quote!(#ident: impl ::std::os::fd::IntoRawFd));
+        }else {
             args.push(arg.clone());
         }
     }
@@ -303,7 +318,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         #f
         #[doc = #doc]
         pub fn #name (#(#args),*) -> impl 'static + Send + ::std::future::Future<Output = #ret_ty> {
-            #(#paths)*
+            #(#conversions)*
             async move {
                 unwrap_joined(
                     ::tokio::task::spawn_blocking(move || {
@@ -315,7 +330,7 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
         }
         #[doc = #try_doc]
         pub fn #try_name (#(#args),*) -> impl 'static + Send + ::std::future::Future<Output = #try_ret_ty> {
-            #(#paths)*
+            #(#conversions)*
             ::tokio::task::spawn_blocking(move || {
                 #inner_name(#(#arg_names),*)
             })

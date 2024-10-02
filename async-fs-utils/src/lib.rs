@@ -122,10 +122,11 @@ fn file_stat_at(
 
 #[in_blocking(wrapped = nix::dir::Dir::from, defer_err)]
 fn open_dir(
-    /// Directory to open.
-    fd: OwnedFd,
+    /// Directory to open. Responsibility to close it is transferred to returned object.
+    #[raw_fd]
+    fd: RawFd,
 ) -> Result<Dir, Errno> {
-    Dir::from(fd)
+    Dir::from_fd(fd)
 }
 
 #[in_blocking(wrapped = OwnedFd::try_clone, defer_err)]
