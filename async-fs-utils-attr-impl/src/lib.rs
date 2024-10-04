@@ -235,10 +235,10 @@ fn in_blocking_(attr: Vec<InBlockingAttr>, mut f: ItemFn) -> ::syn::Result<Token
             let ty = arg.ty.as_ref();
             conversions.push(parse_quote!(let #ident: #ty = #ident.as_ref().into();));
             args.push(parse_quote!(#ident: impl AsRef<::std::path::Path>));
-        } else if is_fd{
+        } else if is_fd {
             conversions.push(parse_quote!(let #ident: ::std::os::fd::RawFd = ::std::os::fd::IntoRawFd::into_raw_fd(#ident);));
             args.push(parse_quote!(#ident: impl ::std::os::fd::IntoRawFd));
-        }else {
+        } else {
             args.push(arg.clone());
         }
     }
