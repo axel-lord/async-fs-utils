@@ -14,3 +14,17 @@ missing_panics_doc = "warn"
 missing_safety_doc = "warn"
 future_not_send = "warn"
 missing_const_for_fn = "warn"
+
+[workspace.dependencies]
+futures-core = "0.3.30"
+libc = "0.2.158"
+log = "0.4.22"
+nix = "0.29.0"
+paste = "1.0.15"
+proc-macro2 = "1.0.86"
+quote = "1.0.37"
+reflink-at = { git = "https://github.com/axel-lord/reflink-at" }
+smallvec = "1.13.2"
+syn = "2.0.79"
+tokio = "1.40.0"
+tokio-stream = "0.1.16"

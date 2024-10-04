@@ -2,6 +2,7 @@
 
 use ::std::{
     ffi::{OsStr, OsString},
+    future::Future,
     io,
     os::{
         fd::{BorrowedFd, FromRawFd, OwnedFd, RawFd},
@@ -10,8 +11,10 @@ use ::std::{
     panic::resume_unwind,
     path::Path,
 };
+use std::{pin::Pin, task::Poll};
 
 use ::async_fs_utils_attr::in_blocking;
+use ::futures_core::FusedStream;
 use ::nix::{
     dir::Dir,
     errno::Errno,
@@ -21,8 +24,7 @@ use ::nix::{
 };
 use ::reflink_at::{OnExists, ReflinkAtError};
 use ::smallvec::SmallVec;
-use ::tokio::task::spawn_blocking;
-use ::tokio::{sync::mpsc::error::SendError, task::JoinError};
+use ::tokio::task::{JoinError, JoinHandle};
 use ::tokio_stream::Stream;
 
 /// Re-export of nix that matches version used by crate.
@@ -85,18 +87,57 @@ fn unwrap_joined<T>(t: Result<T, JoinError>) -> T {
 }
 
 /// Read a directory as a stream.
-pub fn read_dir(dir: Dir) -> impl Stream<Item = Result<nix::dir::Entry, Errno>> {
-    let (tx, rx) = tokio::sync::mpsc::channel(64);
+pub fn read_dir(dir: Dir) -> impl Send + FusedStream<Item = Result<nix::dir::Entry, Errno>> {
+    /// Read dir stream.
+    #[derive(Debug)]
+    struct ReadDir(Option<JoinHandle<Option<IterEntry>>>);
 
-    spawn_blocking(move || {
-        for value in dir.into_iter() {
-            if let Err(SendError(t)) = tx.blocking_send(value) {
-                log::error!("read_dir, failure to send item, {t:?}")
-            }
+    /// Iter entry pair.
+    #[derive(Debug)]
+    struct IterEntry(nix::dir::OwningIter, Result<nix::dir::Entry, Errno>);
+
+    impl Stream for ReadDir {
+        type Item = Result<nix::dir::Entry, Errno>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            // If no JoinHandle exists stream has finished.
+            let Some(mut handle) = self.0.take() else {
+                return Poll::Ready(None);
+            };
+
+            // Only case that returns pending waking handled by poll of JoinHandle.
+            let Poll::Ready(value) = Pin::new(&mut handle).poll(cx) else {
+                self.0 = Some(handle);
+                return Poll::Pending;
+            };
+
+            // Handle returned finished stream. Might panic Might panic.
+            let Some(IterEntry(mut iter, entry)) = unwrap_joined(value) else {
+                return Poll::Ready(None);
+            };
+
+            // Get next entry.
+            self.0 = Some(tokio::task::spawn_blocking(move || {
+                iter.next().map(|next| IterEntry(iter, next))
+            }));
+
+            Poll::Ready(Some(entry))
         }
-    });
+    }
 
-    tokio_stream::wrappers::ReceiverStream::new(rx)
+    impl FusedStream for ReadDir {
+        fn is_terminated(&self) -> bool {
+            self.0.is_none()
+        }
+    }
+
+    ReadDir(Some(tokio::task::spawn_blocking(move || {
+        let mut iter = dir.into_iter();
+        iter.next().map(|next| IterEntry(iter, next))
+    })))
 }
 
 #[in_blocking(wrapped = nix::sys::stat::fstat, defer_err)]

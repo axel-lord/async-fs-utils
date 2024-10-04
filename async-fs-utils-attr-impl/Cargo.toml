@@ -6,9 +6,9 @@ authors = ["Axel Lord"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-proc-macro2 = "1.0.86"
-syn = { version = "2.0.79", features = ["full", "extra-traits"] }
-quote = "1.0.37"
+proc-macro2 = { workspace = true }
+syn = { workspace = true, features = ["full", "extra-traits"] }
+quote = { workspace = true }
 
 [lints]
 workspace = true
